@@ -191,7 +191,7 @@ module Fluent::Plugin
       @namespace_cache = LruRedux::TTL::ThreadSafeCache.new(@cache_size, @cache_ttl)
 
       @tag_to_kubernetes_name_regexp_compiled = Regexp.compile(@tag_to_kubernetes_name_regexp)
-      
+
       @container_name_to_kubernetes_regexp_compiled = Regexp.compile(@container_name_to_kubernetes_regexp)
 
       # Use Kubernetes default service account if we're in a pod.
@@ -255,8 +255,7 @@ module Fluent::Plugin
         auth_options = {}
 
         if present?(@bearer_token_file)
-          bearer_token = File.read(@bearer_token_file)
-          auth_options[:bearer_token] = bearer_token
+          auth_options[:bearer_token_file] = @bearer_token_file
         end
 
         log.debug 'Creating K8S client'
@@ -343,7 +342,7 @@ module Fluent::Plugin
             tag_match_data['pod_uuid']
           else
             tag_match_data['docker_id']
-          end 
+          end
           docker_id = tag_match_data.names.include?('docker_id') ? tag_match_data['docker_id'] : nil
           tag_metadata = get_metadata_for_record(tag_match_data['namespace'], tag_match_data['pod_name'], tag_match_data['container_name'],
                                                  cache_key, create_time_from_record(record, time), batch_miss_cache, docker_id)
