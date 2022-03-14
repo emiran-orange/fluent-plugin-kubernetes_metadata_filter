@@ -121,7 +121,10 @@ module Fluent::Plugin
     rescue StandardError => e
       @stats.bump(:pod_cache_api_nil_error)
       if e.error_code == 401
-        @client.instance_variable_set(:@faraday_client, false)
+        # This will be enough with kubeclient 5
+        # @client.instance_variable_set(:@faraday_client, nil)
+        # until then
+        create_k8s_client
         log.debug "Enforce k8s client re-creation in case Unauthorized error is due to token renewal"
       end
       log.debug "Exception '#{e}' encountered fetching pod metadata from Kubernetes API #{@apiVersion} endpoint #{@kubernetes_url}"
@@ -156,7 +159,10 @@ module Fluent::Plugin
       @namespace_cache[metadata['namespace_id']] = metadata
     rescue StandardError => e
       if e.error_code == 401
-        @client.instance_variable_set(:@faraday_client, false)
+        # This will be enough with kubeclient 5
+        # @client.instance_variable_set(:@faraday_client, nil)
+        # until then
+        create_k8s_client
         log.debug "Enforce k8s client re-creation in case Unauthorized error is due to token renewal"
       end
       @stats.bump(:namespace_cache_api_nil_error)
@@ -167,6 +173,51 @@ module Fluent::Plugin
     def initialize
       super
       @prev_time = Time.now
+    end
+
+    def create_k8s_client
+        ssl_options = {
+          client_cert: present?(@client_cert) ? OpenSSL::X509::Certificate.new(File.read(@client_cert)) : nil,
+          client_key: present?(@client_key) ? OpenSSL::PKey::RSA.new(File.read(@client_key)) : nil,
+          ca_file: @ca_file,
+          verify_ssl: @verify_ssl ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
+        }
+
+        if @ssl_partial_chain
+          # taken from the ssl.rb OpenSSL::SSL::SSLContext code for DEFAULT_CERT_STORE
+          require 'openssl'
+          ssl_store = OpenSSL::X509::Store.new
+          ssl_store.set_default_paths
+          flagval = if defined? OpenSSL::X509::V_FLAG_PARTIAL_CHAIN
+                      OpenSSL::X509::V_FLAG_PARTIAL_CHAIN
+                    else
+                      # this version of ruby does not define OpenSSL::X509::V_FLAG_PARTIAL_CHAIN
+                      0x80000
+                    end
+          ssl_store.flags = OpenSSL::X509::V_FLAG_CRL_CHECK_ALL | flagval
+          ssl_options[:cert_store] = ssl_store
+        end
+
+        auth_options = {}
+
+        if present?(@bearer_token_file)
+          auth_options[:bearer_token_file] = @bearer_token_file
+        end
+
+        log.debug 'Creating K8S client'
+        @client = Kubeclient::Client.new(
+          @kubernetes_url,
+          @apiVersion,
+          ssl_options: ssl_options,
+          auth_options: auth_options,
+          as: :parsed_symbolized
+        )
+
+        if @test_api_adapter
+          log.info "Extending client with test api adaper #{@test_api_adapter}"
+          require_relative @test_api_adapter.underscore
+          @client.extend(eval(@test_api_adapter))
+        end
     end
 
     def configure(conf)
@@ -238,49 +289,7 @@ module Fluent::Plugin
       end
 
       if present?(@kubernetes_url)
-        ssl_options = {
-          client_cert: present?(@client_cert) ? OpenSSL::X509::Certificate.new(File.read(@client_cert)) : nil,
-          client_key: present?(@client_key) ? OpenSSL::PKey::RSA.new(File.read(@client_key)) : nil,
-          ca_file: @ca_file,
-          verify_ssl: @verify_ssl ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
-        }
-
-        if @ssl_partial_chain
-          # taken from the ssl.rb OpenSSL::SSL::SSLContext code for DEFAULT_CERT_STORE
-          require 'openssl'
-          ssl_store = OpenSSL::X509::Store.new
-          ssl_store.set_default_paths
-          flagval = if defined? OpenSSL::X509::V_FLAG_PARTIAL_CHAIN
-                      OpenSSL::X509::V_FLAG_PARTIAL_CHAIN
-                    else
-                      # this version of ruby does not define OpenSSL::X509::V_FLAG_PARTIAL_CHAIN
-                      0x80000
-                    end
-          ssl_store.flags = OpenSSL::X509::V_FLAG_CRL_CHECK_ALL | flagval
-          ssl_options[:cert_store] = ssl_store
-        end
-
-        auth_options = {}
-
-        if present?(@bearer_token_file)
-          auth_options[:bearer_token_file] = @bearer_token_file
-        end
-
-        log.debug 'Creating K8S client'
-        @client = Kubeclient::Client.new(
-          @kubernetes_url,
-          @apiVersion,
-          ssl_options: ssl_options,
-          auth_options: auth_options,
-          as: :parsed_symbolized
-        )
-
-        if @test_api_adapter
-          log.info "Extending client with test api adaper #{@test_api_adapter}"
-          require_relative @test_api_adapter.underscore
-          @client.extend(eval(@test_api_adapter))
-        end
-
+        create_k8s_client
         begin
           @client.api_valid?
         rescue KubeException => e
