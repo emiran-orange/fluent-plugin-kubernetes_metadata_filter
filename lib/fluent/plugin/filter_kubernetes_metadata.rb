@@ -121,7 +121,7 @@ module Fluent::Plugin
     rescue StandardError => e
       @stats.bump(:pod_cache_api_nil_error)
       if e.error_code == 401
-        @client.instance_variable_set(:@faraday_client, nil)
+        @client.instance_variable_set(:@faraday_client, false)
         log.debug "Enforce k8s client re-creation in case Unauthorized error is due to token renewal"
       end
       log.debug "Exception '#{e}' encountered fetching pod metadata from Kubernetes API #{@apiVersion} endpoint #{@kubernetes_url}"
@@ -156,7 +156,7 @@ module Fluent::Plugin
       @namespace_cache[metadata['namespace_id']] = metadata
     rescue StandardError => e
       if e.error_code == 401
-        @client.instance_variable_set(:@faraday_client, nil)
+        @client.instance_variable_set(:@faraday_client, false)
         log.debug "Enforce k8s client re-creation in case Unauthorized error is due to token renewal"
       end
       @stats.bump(:namespace_cache_api_nil_error)
